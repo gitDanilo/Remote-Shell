@@ -80,40 +80,86 @@ DWORD ShellSession::ReadShell()
 	ExitThread(0);
 }
 
+RSHAction ShellSession::ParseBuffer(char* Buffer, DWORD &dwBufferSize)
+{
+	DWORD i;
+	bool bFound = false;
+	for (i = 0; i < dwBufferSize; ++i)
+	{
+		if (Buffer[i] == '\n')
+		{
+			bFound = true;
+			break;
+		}
+		if (Buffer[i] == '\r')
+		{
+			Buffer[i] = '\n';
+			bFound = true;
+			break;
+		}
+	}
+
+	if (bFound == false || (bFound == true && i == 0))
+		return RSHAction::unknown;
+
+	dwBufferSize = i + 1;
+
+	if (_strnicmp(Buffer, "end\n", 4) == 0)
+		return RSHAction::end_session;
+	else if (_strnicmp(Buffer, "exit\n", 5) == 0)
+		return RSHAction::exit;
+
+	return RSHAction::cmd;
+}
+
 DWORD ShellSession::WriteShell()
 {
-	char RecvBuffer[1];
+	char BytesRecv[BUFFER_SIZE];
 	char Buffer[BUFFER_SIZE];
 	DWORD dwBytesWritten;
-	DWORD dwBufferCnt = 0;
+	DWORD dwBytesRecv;
+	DWORD dwBufferSize;
 
-	while (recv(Socket, RecvBuffer, sizeof(RecvBuffer), 0) != 0)
+	dwBytesRecv = recv(Socket, BytesRecv, BUFFER_SIZE, 0);
+	for (dwBufferSize = 0; dwBytesRecv > 0; dwBytesRecv = recv(Socket, BytesRecv, BUFFER_SIZE, 0))
 	{
-		if (RecvBuffer[0] == '\r')
-			RecvBuffer[0] = '\n';
-		
-		Buffer[dwBufferCnt++] = RecvBuffer[0];
-
-		if (_strnicmp(Buffer, "end\n", 4) == 0)
+		if (dwBufferSize + dwBytesRecv > BUFFER_SIZE)
 		{
-			ExitThread(0);
-		}
-		else if (_strnicmp(Buffer, "exit\n", 5) == 0)
-		{
-			ExitThread(0xFFFFFFFF);
+			// Discard buffer
+			dwBufferSize = 0;
+			continue;
 		}
 
-		if (RecvBuffer[0] == '\n' || dwBufferCnt >= BUFFER_SIZE)
+		// Concatenate bytes received to buffer
+		memcpy(&Buffer[dwBufferSize], BytesRecv, dwBytesRecv);
+		dwBufferSize += dwBytesRecv;
+
+		// Process Buffer
+		switch (ParseBuffer(Buffer, dwBufferSize))
 		{
-			EnterCriticalSection(&csReadPipe);
+			case RSHAction::exit:
+			{
+				ExitThread(0xFFFFFFFF); // Exit application
+				break;
+			}
+			case RSHAction::end_session:
+			{
+				ExitThread(0);
+				break;
+			}
+			case RSHAction::cmd:
+			{
+				EnterCriticalSection(&csReadPipe);
 
-			if (!WriteFile(hWritePipe, Buffer, dwBufferCnt, &dwBytesWritten, NULL))
-				ExitThread(GetLastError());
-			if (!ReadFile(hReadPipe, Buffer, dwBufferCnt, NULL, NULL))
-				ExitThread(GetLastError());
+				if (!WriteFile(hWritePipe, Buffer, dwBufferSize, &dwBytesWritten, NULL))
+					ExitThread(GetLastError());
+				if (!ReadFile(hReadPipe, Buffer, dwBytesWritten, NULL, NULL)) // Remove cmd from pipe to avoid sending it back
+					ExitThread(GetLastError());
 
-			LeaveCriticalSection(&csReadPipe);
-			dwBufferCnt = 0;
+				LeaveCriticalSection(&csReadPipe);
+				dwBufferSize = 0;
+				break;
+			}
 		}
 	}
 
