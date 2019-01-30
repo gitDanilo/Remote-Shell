@@ -33,6 +33,38 @@ HANDLE ShellSession::CreateShell(HANDLE hPipeStdInput, HANDLE hPipeStdOutput)
 	return hProcess;
 }
 
+RSHAction ShellSession::ParseBuffer(char* Buffer, DWORD &dwBufferSize)
+{
+	DWORD i;
+	bool bFound = false;
+	for (i = 0; i < dwBufferSize; ++i)
+	{
+		if (Buffer[i] == '\n')
+		{
+			bFound = true;
+			break;
+		}
+		if (Buffer[i] == '\r')
+		{
+			Buffer[i] = '\n';
+			bFound = true;
+			break;
+		}
+	}
+
+	if (bFound == false)
+		return RSHAction::unknown;
+
+	dwBufferSize = i + 1;
+
+	if (_strnicmp(Buffer, "end\n", 4) == 0)
+		return RSHAction::end_session;
+	else if (_strnicmp(Buffer, "exit\n", 5) == 0)
+		return RSHAction::exit;
+
+	return RSHAction::cmd;
+}
+
 DWORD WINAPI ShellSession::StartReadShell(LPVOID lpParam)
 {
 	ShellSession* pShellSession = static_cast<ShellSession*>(lpParam);
@@ -53,63 +85,25 @@ DWORD ShellSession::ReadShell()
 
 	do
 	{
-		EnterCriticalSection(&csReadPipe);
-
 		bReturn = PeekNamedPipe(hReadPipe, Buffer, sizeof(Buffer), &dwBytesRead, NULL, NULL);
-		if (bReturn && dwBytesRead > 0)
+		if (bReturn == FALSE)
+			break;
+
+		if (dwBytesRead == 0)
 		{
-			if (!ReadFile(hReadPipe, Buffer, sizeof(Buffer), &dwBytesRead, NULL))
-				ExitThread(GetLastError());
+			Sleep(50);
+			continue;
 		}
 
-		LeaveCriticalSection(&csReadPipe);
+		if (!ReadFile(hReadPipe, Buffer, sizeof(Buffer), &dwBytesRead, NULL))
+			ExitThread(GetLastError());
 
-		if (bReturn)
-		{
-			if (dwBytesRead == 0)
-			{
-				Sleep(50);
-				continue;
-			}
+		if (send(Socket, Buffer, dwBytesRead, 0) <= 0)
+			ExitThread(0);
 
-			if (send(Socket, Buffer, dwBytesRead, 0) <= 0)
-				ExitThread(0);
-		}
 	} while (bReturn == TRUE);
 
 	ExitThread(0);
-}
-
-RSHAction ShellSession::ParseBuffer(char* Buffer, DWORD &dwBufferSize)
-{
-	DWORD i;
-	bool bFound = false;
-	for (i = 0; i < dwBufferSize; ++i)
-	{
-		if (Buffer[i] == '\n')
-		{
-			bFound = true;
-			break;
-		}
-		if (Buffer[i] == '\r')
-		{
-			Buffer[i] = '\n';
-			bFound = true;
-			break;
-		}
-	}
-
-	if (bFound == false || (bFound == true && i == 0))
-		return RSHAction::unknown;
-
-	dwBufferSize = i + 1;
-
-	if (_strnicmp(Buffer, "end\n", 4) == 0)
-		return RSHAction::end_session;
-	else if (_strnicmp(Buffer, "exit\n", 5) == 0)
-		return RSHAction::exit;
-
-	return RSHAction::cmd;
 }
 
 DWORD ShellSession::WriteShell()
@@ -135,7 +129,8 @@ DWORD ShellSession::WriteShell()
 		dwBufferSize += dwBytesRecv;
 
 		// Process Buffer
-		switch (ParseBuffer(Buffer, dwBufferSize))
+		RSHAction rshAction = ParseBuffer(Buffer, dwBufferSize);
+		switch (rshAction)
 		{
 			case RSHAction::exit:
 			{
@@ -149,14 +144,8 @@ DWORD ShellSession::WriteShell()
 			}
 			case RSHAction::cmd:
 			{
-				EnterCriticalSection(&csReadPipe);
-
 				if (!WriteFile(hWritePipe, Buffer, dwBufferSize, &dwBytesWritten, NULL))
 					ExitThread(GetLastError());
-				if (!ReadFile(hReadPipe, Buffer, dwBytesWritten, NULL, NULL)) // Remove cmd from pipe to avoid sending it back
-					ExitThread(GetLastError());
-
-				LeaveCriticalSection(&csReadPipe);
 				dwBufferSize = 0;
 				break;
 			}
@@ -218,8 +207,8 @@ DWORD ShellSession::Init(SOCKET Socket)
 	SA.lpSecurityDescriptor = NULL;
 	SA.bInheritHandle = FALSE;
 
-	if (!InitializeCriticalSectionAndSpinCount(&csReadPipe, 0x0000100))
-		return GetLastError();
+	//if (!InitializeCriticalSectionAndSpinCount(&csReadPipe, 0x0000100))
+	//	return GetLastError();
 
 	hShellReadThread = CreateThread(&SA, 0, StartReadShell, this, 0, nullptr);
 	if (hShellReadThread == NULL)
@@ -310,7 +299,7 @@ void ShellSession::Close()
 		hShellWriteThread = NULL;
 	}
 
-	DeleteCriticalSection(&csReadPipe);
+	//DeleteCriticalSection(&csReadPipe);
 
 	if (hShell != NULL)
 	{

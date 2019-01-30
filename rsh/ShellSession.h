@@ -2,13 +2,15 @@
 
 #include <WinSock2.h>
 
+#include <iostream>
+
 #define BUFFER_SIZE 1024
 #define HANDLE_LIST_SIZE 3
 #define DEFAULT_WIN_SHELL "\\system32\\cmd.exe"
 
 enum class RSHAction
 {
-	unknown, ignore, exit, end_session, cmd
+	unknown, exit, end_session, cmd
 };
 
 class ShellSession
@@ -20,7 +22,7 @@ private:
 	HANDLE hWritePipe;
 	HANDLE hShellReadThread;
 	HANDLE hShellWriteThread;
-	CRITICAL_SECTION csReadPipe;
+	//CRITICAL_SECTION csReadPipe;
 	HANDLE CreateShell(HANDLE hPipeStdInput, HANDLE hPipeStdOutput);
 	RSHAction ParseBuffer(char* Buffer, DWORD &dwBufferSize);
 	// Thread Starter
